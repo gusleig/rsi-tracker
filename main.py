@@ -1,24 +1,42 @@
-from binance.client import Client
+# from binance.client import Client
 import numpy as np
 import pandas as pd
 import smtplib
 import time
-import yaml
+# import yaml
 import os
 import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import datetime
-from tradingview_ta import TA_Handler, Interval
+
 import btalib
+
 # import tulipy
+
 import talib
 from talib import RSI, BBANDS, SMA, MOM
 import pandas_ta as ta
+
+from ta import add_all_ta_features
+from ta.volatility import BollingerBands
+from ta.momentum import RSIIndicator
+from ta.utils import dropna
+
+from mpl_finance import candlestick_ohlc
+import matplotlib.dates as mpl_dates
+import matplotlib.pyplot as plt
+
+
+plt.rcParams['figure.figsize'] = [12, 7]
+
+plt.rc('font', size=14)
+
+
 from decimal import Decimal, getcontext
 
-from binance.websockets import BinanceSocketManager
-from twisted.internet import reactor
+# from binance.websockets import BinanceSocketManager
+# from twisted.internet import reactor
 
 LOG_FILE_PATH = os.path.dirname(os.path.realpath(__file__))
 
@@ -35,7 +53,7 @@ all_prices = "/api/v3/ticker/price"
 API_KEY = os.environ.get('binance_api')
 API_SECRET = os.environ.get('binance_secret')
 
-client = Client(API_KEY, API_SECRET)
+# client = Client(API_KEY, API_SECRET)
 
 # against ETH
 SYMBOLS = ('ADA', 'ADX', 'BAT', 'BCC', 'DASH', 'EOS', 'IOTA',
@@ -47,8 +65,6 @@ RUN_INTERVAL_MINS = 10
 
 coin_price = {'error': False}
 
-handler = TA_Handler()
-handler.set_exchange_as_crypto_or_stock("BINANCE")
 
 
 def coin_trade_history(msg):
@@ -61,11 +77,6 @@ def coin_trade_history(msg):
     else:
         coin_price['error'] = True
 
-
-def trading_view(symbol="BTCUSD", tf=Interval.INTERVAL_1_HOUR):
-    handler.set_symbol_as(symbol)
-    handler.set_screener_as_crypto()
-    print(handler.get_analysis())
 
 
 def pure_python_rsi(prices, n):
@@ -199,6 +210,47 @@ def bbww(price):
     return bbw
 
 
+def isSupport(df,i):
+    support = df['Low'][i] < df['Low'][i-1]  and df['Low'][i] < df['Low'][i+1] and df['Low'][i+1] < df['Low'][i+2] and df['Low'][i-1] < df['Low'][i-2]
+    return support
+
+def isResistance(df,i):
+    resistance = df['High'][i] > df['High'][i-1]  and df['High'][i] > df['High'][i+1] and df['High'][i+1] > df['High'][i+2] and df['High'][i-1] > df['High'][i-2]
+    return resistance
+
+def plot_all():
+
+    def isFarFromLevel(l):
+        return np.sum([abs(l - x) < s for x in levels]) == 0
+
+    levels = []
+
+    for i in range(2, df.shape[0] - 2):
+        if isSupport(df, i):
+            l = df['Low'][i]
+            if isFarFromLevel(l):
+                levels.append((i, l))
+        elif isResistance(df, i):
+            l = df['High'][i]
+            if isFarFromLevel(l):
+                levels.append((i, l))
+
+    fig, ax = plt.subplots()
+
+    candlestick_ohlc(ax,df.values,width=0.6, \
+                   colorup='green', colordown='red', alpha=0.8)
+
+    date_format = mpl_dates.DateFormatter('%d %b %Y')
+    ax.xaxis.set_major_formatter(date_format)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    for level in levels:
+        plt.hlines(level[1],xmin=df['Date'][level[0]],\
+               xmax=max(df['Date']),colors='blue')
+    fig.show()
+
+
 if __name__ == '__main__':
 
     # bsm = BinanceSocketManager(client)
@@ -261,7 +313,7 @@ if __name__ == '__main__':
 
     for index, coin in df_final.iterrows():
 
-        if coin['symbol'][-3:] == 'BTC': # or coin['symbol'][-4:] == 'USDT':
+        if coin['symbol'][-3:] == 'BTC' or coin['symbol'][-4:] == 'USDT':
 
             coins_tracked.append(coin['symbol'])
 
@@ -269,7 +321,9 @@ if __name__ == '__main__':
 
         total = len(coins_tracked)
 
-        df_final = df = pd.DataFrame()
+        df_final = df = pd.DataFrame(columns=['pair', 'rsi_1h', 'rsi_4h', 'rsi_1d', 'rsi_1w',
+                                              'bb_bbp_1h', 'bb_bbp_4h', 'bb_bbp_1d', 'bb_bbp_1w',
+                                              'bb_bbw_1h', 'bb_bbw_4h', 'bb_bbw_1d', 'bb_bbw_1w'])
         df_rsi = pd.DataFrame()
 
         for n, pair in enumerate(coins_tracked):
@@ -308,15 +362,47 @@ if __name__ == '__main__':
                                                       'Number of trades', 'Taker buy base asset volume',
                                                       'Taker buy quote asset volume', 'Ignore'])
 
-                df_bars.insert(loc=0, column='pair', value=pair)
-                df_bars.insert(loc=1, column='tf', value=tf)
+                df_bars = dropna(df_bars)
+                df_bars['Open'] = pd.to_numeric(df_bars['Open'], errors='coerce')
+                df_bars['Close'] = pd.to_numeric(df_bars['Close'], errors='coerce')
+                df_bars['High'] = pd.to_numeric(df_bars['High'], errors='coerce')
+                df_bars['Low'] = pd.to_numeric(df_bars['Low'], errors='coerce')
+                df_bars['Quote asset volume'] = pd.to_numeric(df_bars['Quote asset volume'], errors='coerce')
+
+                # Initialize Bollinger Bands Indicator
+                indicator_bb = BollingerBands(close=df_bars["Close"], window=20, window_dev=2)
+
+                # Add Bollinger Bands features
+                # df_bars['bb_bbm'] = indicator_bb.bollinger_mavg()
+                # df_bars['bb_bbh'] = indicator_bb.bollinger_hband()
+                #df_bars['bb_bbl'] = indicator_bb.bollinger_lband()
+
+                # Add Bollinger Band high indicator
+                # df_bars['bb_bbhi'] = indicator_bb.bollinger_hband_indicator()
+
+                # Add Bollinger Band low indicator
+                # df_bars['bb_bbli'] = indicator_bb.bollinger_lband_indicator()
+
+                # Add Width Size Bollinger Bands
+                df_bars['bb_bbw_' + tf] = indicator_bb.bollinger_wband()
+
+                # Add Percentage Bollinger Bands
+                df_bars['bb_bbp_' + tf] = indicator_bb.bollinger_pband()
+
+
+                # df_bars.insert(loc=0, column='pair', value=pair)
+                # df_bars.insert(loc=1, column='tf', value=tf)
                 # df_bars['pair'] = pair
-                df_bars['High'] = df_bars.High.astype(np.float64)
-                df_bars['Low'] = df_bars.Low.astype(np.float64)
-                df_bars['Close'] = df_bars.Close.astype(np.float64)
+                # df_bars['High'] = df_bars.High.astype(np.float64)
+                # df_bars['Low'] = df_bars.Low.astype(np.float64)
+                # df_bars['Close'] = df_bars.Close.astype(np.float64)
 
+                df_bars['rsi_' + tf] = RSIIndicator(close=df_bars["Close"]).rsi()
 
+                # df_bars = add_all_ta_features(
+                #    df_bars, open="Open", high="High", low="Low", close="Close", volume="Quote asset volume")
 
+                # print(df_bars.info())
                 # use Python Function
 
                 # rsi = pure_python_rsi(df_bars['Close'], 14)
@@ -334,16 +420,6 @@ if __name__ == '__main__':
                 # df_bars.ta.percent_return(cumulative=True, append=True)
 
                 # Create your own Custom Strategy
-                CustomStrategy = ta.Strategy(
-                    name="Momo and Volatility",
-                    description="SMA 50,200, BBANDS, RSI, MACD and Volume SMA 20",
-                    ta=[
-                        {"kind": "bbands", "length": 20, "col_names": ("BBL", "BBM", "BBU")},
-                        {"kind": "rsi"},
-                    ]
-                )
-                # To run your "Custom Strategy"
-                df_bars.ta.strategy(CustomStrategy)
 
                 # df_bars = df_bars.set_index('Open time')
 
@@ -360,17 +436,18 @@ if __name__ == '__main__':
                 # else:
                 #     rsi_set.append(-1)
                 #     continue
-                df_rsi['PAIR'] = df_bars.tail(1)['pair'].values
-                df_rsi['RSI_14_' + tf] = df_bars.tail(1)['RSI_14'].values
-                df_rsi['BBL_' + tf] = df_bars.tail(1)['BBL'].values
-                df_rsi['BBM_' + tf] = df_bars.tail(1)['BBM'].values
-                df_rsi['BBU_' + tf] = df_bars.tail(1)['BBU'].values
+                print(tf + ": " + str(df_bars.tail(1)['rsi_' + tf].values.max()))
+
+                df_rsi['rsi_' + tf] = df_bars.tail(1)['rsi_' + tf].values
+                df_rsi['bb_bbp_' + tf] = df_bars.tail(1)['bb_bbp_' + tf].values
+                df_rsi['bb_bbw_' + tf] = df_bars.tail(1)['bb_bbw_' + tf].values
 
                 # rsi_set.append(list(df_bars.tail(1)[['RSI_14', 'BBL', 'BBM', 'BBU']]))
 
                 # df_final.loc[i] = list(df_bars.tail(1)[['pair', 'RSI_14', 'BBL', 'BBM', 'BBU']])
 
                 # df_final = pd.concat([df_final, df_bars.tail(1)], axis=1)
+            df_rsi['pair'] = pair
 
             df_final = pd.concat([df_final, df_rsi], axis=0)
 
@@ -379,15 +456,27 @@ if __name__ == '__main__':
         # print('\n'.join('{0:>8} {1:.2f}'.format(symbol, rsi) for (symbol, rsi) in rsi_values))
         # rsi_values = list(filter(lambda x: x[1] < RSI_THRESHOLD, rsi_values))
 
-        df = pd.DataFrame(rsi_values, columns=['Pair', 'rsi', 'bbp'])
+        # df = pd.DataFrame(rsi_values, columns=['Pair', 'rsi', 'bbp'])
 
-        df[['1h', '4h', '1d', '1w']] = pd.DataFrame(df.rsi.tolist(), index=df.index)
+        # df[['1h', '4h', '1d', '1w']] = pd.DataFrame(df.rsi.tolist(), index=df.index)
 
-        df[['bbp_1h', 'bbp_4h', 'bbp_1d', 'bbp_1w']] = pd.DataFrame(df.bbp.tolist(), index=df.index)
+        # df[['bbp_1h', 'bbp_4h', 'bbp_1d', 'bbp_1w']] = pd.DataFrame(df.bbp.tolist(), index=df.index)
 
-        df_buy = df[(df['1h'] < 40) & (df['4h'] < 40) & (df['1d'] < 40) & (df['1w'] < 40)]
+        df_buy = df_final[(df_final[['rsi_1h', 'rsi_4h', 'rsi_1d', 'rsi_1w']] < 40).all(axis=1)]
 
-        df_sell = df[(df['1h'] > 70) & (df['4h'] > 70) & (df['1d'] > 70) & (df['1w'] > 70)]
+        if len(df_buy.index) == 0:
+
+            df_buy = df_final[(df_final[['rsi_1h', 'rsi_4h', 'rsi_1d']] < 40).all(axis=1)]
+
+        df_sell = df_final[(df_final[['rsi_1h', 'rsi_4h', 'rsi_1d', 'rsi_1w']] > 80).all(axis=1)]
+
+        if len(df_sell.index) == 0:
+            df_sell = df_final[(df_final[['rsi_1h', 'rsi_4h', 'rsi_1d']] > 80).all(axis=1)]
+
+
+        # df_buy = df_final[(df_final['1h'] < 40) & (df_final['4h'] < 40) & (df_final['1d'] < 40) & (df_final['1w'] < 40)]
+
+        # df_sell = df[(df['1h'] > 70) & (df['4h'] > 70) & (df['1d'] > 70) & (df['1w'] > 70)]
 
         end = time.time()
 
